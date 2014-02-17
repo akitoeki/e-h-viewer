@@ -1,0 +1,23 @@
+{
+  "manifest_version": 2,
+
+  "name": "Parse EHentai",
+  "description": "For Perv only",
+  "version": "1.0",
+  "browser_action": {
+    "default_icon": "icon.png",
+    "name" : "Parse Now"
+  },
+  "background": {
+      "scripts": ["background.js"]
+  },
+  "permissions": [
+    "http://g.e-hentai.org/*"
+  ],
+  "content_scripts": [
+      {
+        "matches": ["http://g.e-hentai.org/*"],
+        "js": ["jquery.js"]
+      }
+    ]
+}
