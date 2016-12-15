@@ -34,13 +34,14 @@
         return function() {
           // console.log(">>> parse: " + s);
           $.get(s, function(result) {
-            $(result).find(".gdtl").each(function(){
-              // console.log($(this).children("a").attr("href"));
+            $(result).find(".gdtm").each(function(){
+              console.log($(this).find("a").attr('href'));
               count++;
-              images.push($(this).children("a").attr("href"));
-              thumbs.push($(this).children("a").html());
+              images.push($(this).find("a").attr("href"));
+              thumbs.push($(this).find("a").html());
               startDownload();
             });
+            console.log(images)
           });
         };
       }(page), i * 3000);
