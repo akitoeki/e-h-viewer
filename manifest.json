@@ -12,11 +12,11 @@
       "scripts": ["background.js"]
   },
   "permissions": [
-    "http://g.e-hentai.org/*"
+    "https://e-hentai.org/g/*"
   ],
   "content_scripts": [
       {
-        "matches": ["http://g.e-hentai.org/*"],
+        "matches": ["https://e-hentai.org/g/*"],
         "js": ["jquery.js"]
       }
     ]

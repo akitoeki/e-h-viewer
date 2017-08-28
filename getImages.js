@@ -19,15 +19,14 @@
 
   //Get GID, Token & Image links
 
+
   if (ss[3] == "g") {
     var total = parseInt($(".ptt td").last().prev().children().html());
-
-    var cleanUrl = "http://g.e-hentai.org/g/"+ss[4]+"/"+ss[5]+"/?p=";
+    console.log(total)
+    var cleanUrl = "https://e-hentai.org/g/"+ss[4]+"/"+ss[5]+"/?p=";
     console.log(cleanUrl);
 
     //Proceed to get the links
-
-
     for (var i = 0; i < total; i++) {
       var page = cleanUrl+i;
       setTimeout(function(s){
