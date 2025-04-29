@@ -16,6 +16,15 @@ var imgLoadTimeout = 20000;
 var timeout = 0;
 var uiVisible = true; // Track UI visibility for both modes
 
+// Global variables to manage state and listeners for reverting
+let originalBodyHTML = null;
+let customStyleSheet = null;
+let loopInterval = null; // To store the setInterval ID
+let viewerKeyDownListener = null; // Reference to the main keydown listener
+let viewerMouseMoveListener = null; // Reference to the mousemove listener
+let escapeKeyListener = null; // Reference to the escape key listener itself
+let initialKeyListener = null; // Listener for 'R' key to initially start
+
 // Simple cache system
 const CACHE_KEY = "ehviewer_image_cache";
 const CACHE_LIMIT = 100;
@@ -228,9 +237,148 @@ const styles = `
   }
 `;
 
+// Function to handle reverting to original UI
+function revertToOriginalUI() {
+  if (!started || !originalBodyHTML) {
+    console.log(
+      "Cannot revert: Script not started or original body not saved."
+    );
+    return;
+  }
+
+  console.log("Reverting to original page UI...");
+
+  // 1. Stop image loading loop
+  if (loopInterval) {
+    clearInterval(loopInterval);
+    loopInterval = null;
+  }
+
+  // 2. Restore body content
+  document.body.innerHTML = originalBodyHTML;
+
+  // 3. Remove custom stylesheet
+  if (customStyleSheet) {
+    customStyleSheet.remove();
+    customStyleSheet = null;
+  }
+
+  // 4. Remove added body classes (safer to remove all)
+  document.body.removeAttribute("class");
+
+  // 5. Remove event listeners
+  if (viewerKeyDownListener) {
+    document.removeEventListener("keydown", viewerKeyDownListener);
+    viewerKeyDownListener = null;
+  }
+  if (viewerMouseMoveListener) {
+    document.removeEventListener("mousemove", viewerMouseMoveListener);
+    viewerMouseMoveListener = null;
+  }
+  if (escapeKeyListener) {
+    document.removeEventListener("keydown", escapeKeyListener); // Remove self
+    escapeKeyListener = null;
+  }
+
+  // 6. Reset script state variables
+  started = false;
+  currentPageIndex = 0;
+  thread = 0;
+  // Reset settings to defaults or keep last loaded? Resetting is safer.
+  viewMode = "scroll";
+  fitType = "contain";
+  uiVisible = true;
+  originalBodyHTML = null; // Allow storing again if script is re-run
+
+  console.log("Viewer UI reverted.");
+
+  // --- Re-add the initial 'R' key listener ---
+  setupInitialKeyListener();
+  // --- End re-adding listener ---
+}
+
+// Function to set up the Escape key listener
+function setupEscapeListener() {
+  // Remove any existing listener first
+  if (escapeKeyListener) {
+    document.removeEventListener("keydown", escapeKeyListener);
+  }
+
+  escapeKeyListener = function (e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      revertToOriginalUI();
+    }
+  };
+  document.addEventListener("keydown", escapeKeyListener);
+}
+
+// Function to set up other viewer event listeners
+function setupViewerEventListeners() {
+  // Remove existing listeners first to prevent duplicates if called again
+  if (viewerKeyDownListener)
+    document.removeEventListener("keydown", viewerKeyDownListener);
+  if (viewerMouseMoveListener)
+    document.removeEventListener("mousemove", viewerMouseMoveListener);
+
+  // Keyboard navigation and UI toggle ('U' key, arrows)
+  viewerKeyDownListener = (e) => {
+    if (e.key === "u" || e.key === "U") {
+      // U key toggles UI in both modes
+      uiVisible = !uiVisible;
+      document
+        .querySelector(".control-panel")
+        ?.classList.toggle("hidden", !uiVisible);
+      document
+        .querySelector(".keyboard-help")
+        ?.classList.toggle("hidden", !uiVisible);
+      e.preventDefault();
+    } else if (viewMode === "page") {
+      switch (e.key) {
+        case "ArrowLeft":
+        case "PageUp":
+          navigatePage("prev");
+          e.preventDefault();
+          break;
+        case "ArrowRight":
+        case "PageDown":
+        case " ":
+          navigatePage("next");
+          e.preventDefault();
+          break;
+      }
+    }
+    // Note: The escape key logic is handled by its dedicated listener
+  };
+
+  // Mouse movement UI show/hide
+  let mouseTimer;
+  viewerMouseMoveListener = () => {
+    clearTimeout(mouseTimer);
+    if (!uiVisible) return; // If UI manually hidden, don't show on move
+
+    document.querySelector(".control-panel")?.classList.remove("hidden");
+    document.querySelector(".keyboard-help")?.classList.remove("hidden");
+
+    if (viewMode === "page") {
+      mouseTimer = setTimeout(() => {
+        if (uiVisible) {
+          // Check again in case U was pressed
+          document.querySelector(".control-panel")?.classList.add("hidden");
+          document.querySelector(".keyboard-help")?.classList.add("hidden");
+        }
+      }, 2000);
+    }
+  };
+
+  document.addEventListener("keydown", viewerKeyDownListener);
+  document.addEventListener("mousemove", viewerMouseMoveListener);
+}
+
 function createControlPanel() {
   const styleSheet = document.createElement("style");
   styleSheet.textContent = styles;
+  customStyleSheet = styleSheet; // Store reference to stylesheet
   document.head.appendChild(styleSheet);
 
   // Create viewer container
@@ -296,22 +444,27 @@ function createControlPanel() {
   keyboardHelp.className = "keyboard-help";
   keyboardHelp.innerHTML = `
         Keyboard Controls:<br>
-        Left Arrow / PageUp: Previous Page<br>
-        Right Arrow / PageDown / Space: Next Page<br>
-        U: Toggle UI visibility in any mode<br>
-        Mouse: Click left/right side to navigate
+        R: Enter/Re-enter Reader Mode (Initial Page)<br>
+        ESC: Exit Reader Mode<br>
+        Left Arrow / PageUp: Previous Page (Fullscreen)<br>
+        Right Arrow / PageDown / Space: Next Page (Fullscreen)<br>
+        U: Toggle UI visibility<br>
+        Mouse: Click left/right side to navigate (Fullscreen)
     `;
   document.body.appendChild(keyboardHelp);
 
-  // Event listeners
+  // --- Setup Event Listeners ---
+  setupViewerEventListeners(); // Setup U key, arrows, mousemove
+  setupEscapeListener(); // Setup Escape key listener
+
+  // --- Control Panel Element Event Listeners ---
   document.getElementById("viewMode").addEventListener("change", (e) => {
     viewMode = e.target.value;
     localStorage.setItem(VIEW_MODE_KEY, viewMode);
     isFullscreen = viewMode === "page";
 
-    // Update viewer container class for scroll mode spacing
     const viewerContainer = document.querySelector(".viewer-container");
-    viewerContainer.classList.toggle("scroll-mode", viewMode === "scroll");
+    viewerContainer?.classList.toggle("scroll-mode", viewMode === "scroll");
 
     updateLayout();
   });
@@ -340,61 +493,9 @@ function createControlPanel() {
     }
   });
 
+  // Navigation overlay listeners
   leftOverlay.addEventListener("click", () => navigatePage("prev"));
   rightOverlay.addEventListener("click", () => navigatePage("next"));
-
-  // Keyboard navigation and UI toggle
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "u" || e.key === "U") {
-      // U key toggles UI in both modes
-      uiVisible = !uiVisible;
-      document
-        .querySelector(".control-panel")
-        .classList.toggle("hidden", !uiVisible);
-      document
-        .querySelector(".keyboard-help")
-        .classList.toggle("hidden", !uiVisible);
-      e.preventDefault();
-    } else if (viewMode === "page") {
-      switch (e.key) {
-        case "ArrowLeft":
-        case "PageUp":
-          navigatePage("prev");
-          e.preventDefault();
-          break;
-        case "ArrowRight":
-        case "PageDown":
-        case " ":
-          navigatePage("next");
-          e.preventDefault();
-          break;
-      }
-    }
-  });
-
-  // Mouse movement UI show/hide
-  let mouseTimer;
-  document.addEventListener("mousemove", () => {
-    clearTimeout(mouseTimer);
-
-    // If UI is manually hidden via 'U', don't show it on mouse move
-    if (!uiVisible) return;
-
-    // Show UI elements
-    document.querySelector(".control-panel").classList.remove("hidden");
-    document.querySelector(".keyboard-help").classList.remove("hidden");
-
-    // Set timeout to hide UI again only if in page mode
-    if (viewMode === "page") {
-      mouseTimer = setTimeout(() => {
-        // Check uiVisible again in case 'U' was pressed during the timeout
-        if (uiVisible) {
-          document.querySelector(".control-panel").classList.add("hidden");
-          document.querySelector(".keyboard-help").classList.add("hidden");
-        }
-      }, 2000);
-    }
-  });
 }
 
 function navigatePage(direction) {
@@ -467,21 +568,50 @@ function updateLayout() {
 
 console.log(ss);
 
-// Get GID, Token & Image links
-if (ss[3] === "g") {
+// Function to actually start the reader process (fetches links, calls startDownload)
+function initiateReaderMode() {
+  if (started) {
+    console.log("Reader mode already active.");
+    return;
+  }
+  console.log("Initiating reader mode...");
+
+  // Remove the initial 'R' listener if it exists
+  if (initialKeyListener) {
+    document.removeEventListener("keydown", initialKeyListener);
+    initialKeyListener = null;
+  }
+
+  // --- Logic moved from the initial 'if (ss[3] === "g")' block ---
+  var url = document.URL; // Re-check URL here in case of SPA navigation
+  var ss = url.split("/");
+  if (ss[3] !== "g") {
+    console.error(
+      "Not on a compatible gallery page (URL structure mismatch). Cannot initiate reader."
+    );
+    setupInitialKeyListener(); // Re-add listener if check fails here
+    return;
+  }
+
   var total = parseInt(
-    document.querySelector(".gtb td:last-child").previousElementSibling
-      .children[0].innerHTML
+    document.querySelector(".gtb td:last-child")?.previousElementSibling
+      ?.children?.[0]?.innerHTML ?? "0"
   );
+  if (!total || isNaN(total) || total <= 0) {
+    console.error("Could not determine total pages or total is zero.");
+    setupInitialKeyListener(); // Re-add listener
+    return;
+  }
+
   console.log({ total });
   var cleanUrl = "https://e-hentai.org/g/" + ss[4] + "/" + ss[5] + "/?p=";
   console.log({ cleanUrl });
 
-  // --- Refactored Initial Link Gathering using Promises ---
+  images = []; // Reset images array before fetching
+
   const fetchPromises = [];
   for (let i = 0; i < total; i++) {
     const pageUrl = cleanUrl + i;
-    // Add fetch promise to the array
     fetchPromises.push(
       fetch(pageUrl)
         .then((response) => {
@@ -494,32 +624,25 @@ if (ss[3] === "g") {
         })
         .catch((error) => {
           console.error("Error fetching gallery page:", pageUrl, error);
-          return null; // Return null on error to allow Promise.all to complete
+          return null;
         })
     );
   }
 
-  // Wait for all gallery pages to be fetched
   Promise.all(fetchPromises)
     .then((results) => {
-      console.log("All gallery pages fetched.");
+      console.log("All gallery pages fetched for link gathering.");
       results.forEach((result) => {
         if (result) {
-          // Process only successful fetches
           const parser = new DOMParser();
           const doc = parser.parseFromString(result, "text/html");
-          const gdtElement = doc.querySelector("#gdt"); // Target the main container
-
+          const gdtElement = doc.querySelector("#gdt");
           if (gdtElement) {
-            const links = gdtElement.querySelectorAll("a"); // Find links within #gdt
+            const links = gdtElement.querySelectorAll("a");
             links.forEach((linkElement) => {
               const link = linkElement.getAttribute("href");
               if (link && link.includes("s/")) {
-                // Basic check if it's an image page link
-                // console.log("Found image page link:", link);
                 images.push(link);
-                // thumbs are not currently used, so skipping thumbs.push
-                // thumbs.push(linkElement.innerHTML);
               }
             });
           } else {
@@ -529,32 +652,71 @@ if (ss[3] === "g") {
       });
 
       console.log(`Total image page links gathered: ${images.length}`);
-      // Call startDownload ONLY ONCE after all links are collected
       if (images.length > 0) {
-        startDownload();
+        startDownload(); // Call the function that builds the reader UI
       } else {
-        console.error("No image links found. Cannot start download.");
-        // Optionally display a message to the user
+        console.error("No image links found. Cannot start reader mode.");
+        setupInitialKeyListener(); // Re-add listener if no links found
       }
     })
     .catch((error) => {
       console.error("An error occurred during initial link gathering:", error);
-      // Handle cases where Promise.all itself fails (though individual fetch errors are caught above)
+      setupInitialKeyListener(); // Re-add listener on major error
     });
-  // --- End Refactored Initial Link Gathering ---
+  // --- End moved logic ---
+}
+
+// Function to set up the initial 'R' key listener
+function setupInitialKeyListener() {
+  // Remove any existing listener first
+  if (initialKeyListener) {
+    document.removeEventListener("keydown", initialKeyListener);
+  }
+  console.log("Setting up initial 'R' key listener.");
+  initialKeyListener = function (e) {
+    // Check if we're typing in an input field
+    const targetTagName = e.target.tagName.toLowerCase();
+    if (
+      targetTagName === "input" ||
+      targetTagName === "textarea" ||
+      targetTagName === "select"
+    ) {
+      return; // Ignore 'R' key if typing in form controls
+    }
+
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      initiateReaderMode(); // Start the process
+    }
+  };
+  document.addEventListener("keydown", initialKeyListener);
 }
 
 function startDownload() {
+  // Store original body *before* clearing, only if not already stored
+  if (originalBodyHTML === null) {
+    console.log("Storing original body HTML.");
+    originalBodyHTML = document.body.innerHTML;
+  }
+
   if (!started) {
-    // Ensure startDownload logic runs only once
+    // Ensure startDownload logic runs only once per execution flow
+    // Clear existing elements potentially added by previous runs if revert wasn't perfect
+    document
+      .querySelectorAll(
+        ".viewer-container, .control-panel, .navigation-overlay, .keyboard-help"
+      )
+      .forEach((el) => el.remove());
+    if (customStyleSheet) customStyleSheet.remove(); // Remove previous stylesheet just in case
+
     // Clear
     document.querySelectorAll("iframe").forEach((iframe) => iframe.remove());
     var desc = document.querySelector(".gm");
 
-    document.body.innerHTML = "";
+    document.body.innerHTML = ""; // Clear existing body
     document.body.style.background = "#121212";
 
-    createControlPanel();
+    createControlPanel(); // Setup UI and ALL event listeners (including ESC)
 
     const viewerContainer = document.querySelector(".viewer-container");
     if (desc) viewerContainer.appendChild(desc);
@@ -568,43 +730,38 @@ function startDownload() {
 
     // --- Prioritize and immediately load cached images ---
     console.log(`Processing ${images.length} total image links.`);
-    const initialImageLinks = [...images]; // Copy original links
-    // images = []; // Don't clear here, keep original list for reference if needed?
-    // Let's stick with the original plan of processing `initialImageLinks`
-    // and populating `imagesToFetch`.
+    const initialImageLinks = [...images];
 
     initialImageLinks.forEach((link) => {
       if (imageCache[link]) {
         console.log("Using cached image (immediate load):", link);
         const container = document.createElement("div");
         container.className = "image-container";
-        // Pass the viewerContainer obtained after createControlPanel
         createAndAppendImage(imageCache[link], container, viewerContainer);
       } else {
-        // Add to the list to be fetched later
         imagesToFetch.push(link);
       }
     });
     console.log(`${imagesToFetch.length} images require fetching.`);
-    // --- End immediate cache processing ---
+
+    // --- Call updateLayout once after processing cache ---
+    console.log("Updating layout after initial cache processing.");
+    updateLayout();
+    // --- End initial updateLayout call ---
 
     // Now, set up the interval loop ONLY for images that need fetching
     if (imagesToFetch.length === 0) {
       console.log("No images require fetching (all were cached).");
-      // Update layout once if needed, especially for page mode page count
-      if (viewMode === "page") updateLayout();
-      return; // No need to start the interval loop
+      return;
     }
 
-    let loop = setInterval(function () {
+    // Assign interval ID to global variable
+    loopInterval = setInterval(function () {
       if (thread < maxThread) {
         if (imagesToFetch.length > 0) {
-          // Check imagesToFetch instead of images
           var container = document.createElement("div");
           container.className = "image-container";
-          // Use viewerContainer directly
-
-          var link = imagesToFetch.shift(); // Get link from fetch list
+          var link = imagesToFetch.shift();
 
           console.log("Fetching image from:", link);
           fetch(link)
@@ -620,16 +777,12 @@ function startDownload() {
               var img = doc.querySelector("#img");
 
               if (img && img.src) {
-                // Cache the image URL
                 imageCache[link] = img.src;
-
-                // Manage cache size
                 const cacheKeys = Object.keys(imageCache);
                 if (cacheKeys.length > CACHE_LIMIT) {
-                  delete imageCache[cacheKeys[0]]; // Remove oldest entry
+                  delete imageCache[cacheKeys[0]];
                 }
-                saveCache(imageCache); // Save cache after potential modification
-
+                saveCache(imageCache);
                 createAndAppendImage(img.src, container, viewerContainer);
               } else {
                 console.error(
@@ -637,16 +790,14 @@ function startDownload() {
                   link
                 );
                 container.remove();
-                // Decrement thread here? No, createAndAppendImage wasn't called.
               }
             })
             .catch((error) => {
               console.error("Error fetching image page:", link, error);
-              container.remove(); // Remove container on fetch error
+              container.remove();
             });
         }
       } else {
-        // This timeout logic is for when max threads are busy
         if (imagesToFetch.length > 0) {
           timeout += 1000;
           if (timeout > imgLoadTimeout) {
@@ -657,14 +808,17 @@ function startDownload() {
         }
       }
 
-      // Stop the interval if there are no more images to fetch and no active threads
+      // Stop the interval
       if (imagesToFetch.length === 0 && thread === 0) {
         console.log("All images processed.");
-        clearInterval(loop);
-        // Update layout once at the very end, especially for page count in page mode
-        if (viewMode === "page") updateLayout();
+        clearInterval(loopInterval);
+        loopInterval = null; // Clear the interval ID
+        console.log("Updating layout after all fetching finished.");
+        updateLayout();
       }
     }, 1000);
+  } else {
+    console.warn("startDownload called again while already started. Ignoring.");
   }
 }
 
@@ -704,10 +858,12 @@ function createAndAppendImage(src, container, viewerContainer) {
   const allContainers = viewerContainer.querySelectorAll(".image-container");
   const newImageIndex = allContainers.length; // Index will be the current count
 
-  // Initially hide container in page mode to prevent flicker
+  // Initially hide container in page mode if it's not the current page
   if (viewMode === "page" && newImageIndex !== currentPageIndex) {
     container.style.display = "none";
   }
+  // Important: If it *is* the first page (index 0), it will default to display: flex/block (depending on CSS)
+  // or be explicitly set by the initial updateLayout call.
 
   // Append container to the main viewer
   viewerContainer.appendChild(container);
@@ -724,23 +880,11 @@ function createAndAppendImage(src, container, viewerContainer) {
     }
     console.log("Image loaded, index:", newImageIndex, "Threads:", thread);
 
-    // Only affect this specific container after load
+    // Only affect this specific container after load for visibility
     if (viewMode === "page") {
       // Ensure correct display based on current page index
       container.style.display =
         newImageIndex === currentPageIndex ? "flex" : "none";
-
-      // Update page info if this newly loaded image is the current page
-      if (newImageIndex === currentPageIndex) {
-        const pageInfo = document.getElementById("pageInfo");
-        const totalPages =
-          viewerContainer.querySelectorAll(".image-container").length;
-        if (pageInfo) {
-          pageInfo.textContent = `Page ${
-            currentPageIndex + 1
-          } of ${totalPages}`;
-        }
-      }
     }
     // No style changes needed for scroll mode here
   };
@@ -751,16 +895,19 @@ function createAndAppendImage(src, container, viewerContainer) {
       thread--; // Decrement thread count on error
     }
     console.log("Image load error, Threads:", thread);
-    // Maybe add placeholder or remove container? For now, just log.
     container.remove(); // Remove container if image fails to load
-    if (viewMode === "page") {
-      // Need to update page count if a container is removed
-      const pageInfo = document.getElementById("pageInfo");
-      const totalPages =
-        viewerContainer.querySelectorAll(".image-container").length;
-      if (pageInfo) {
-        pageInfo.textContent = `Page ${currentPageIndex + 1} of ${totalPages}`;
-      }
-    }
   };
 }
+
+// --- Initial Script Execution --- (REMOVED AUTOMATIC START)
+// Check if on a compatible page BUT DON'T start automatically
+var currentUrl = document.URL;
+var currentSs = currentUrl.split("/");
+if (currentSs[3] === "g") {
+  console.log("On a compatible gallery page. Press 'R' to enter reader mode.");
+  // Set up the listener that waits for 'R'
+  setupInitialKeyListener();
+} else {
+  console.log("Not on a compatible gallery page for the reader mode script.");
+}
+// --- End Initial Script Execution ---
